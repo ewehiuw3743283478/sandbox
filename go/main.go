@@ -85,6 +85,9 @@ type pluginConfig struct {
 	CodexInstruction     string `yaml:"codex_instruction"`
 	GrokInstruction      string `yaml:"grok_instruction"`
 
+	// xAI/Grok reasoning control.
+	GrokReasoningEffort string `yaml:"grok_reasoning_effort"`
+
 	// OpenAI/Codex hosted web_search options.
 	SearchContextSize       string   `yaml:"search_context_size"`
 	ReturnTokenBudget       string   `yaml:"return_token_budget"`
@@ -207,6 +210,7 @@ func defaultPluginConfig() pluginConfig {
 		SetParallelToolCalls: true,
 		MaxToolCalls:         6,
 		AddInstruction:       true,
+		GrokReasoningEffort:  "high",
 		SearchContextSize:    "medium",
 		IncludeActionSources: true,
 		ChatSearchModel:      "gpt-5-search-api",
@@ -230,17 +234,24 @@ func configure(raw []byte) error {
 	}
 	cfg.SearchContextSize = normalizeOneOf(cfg.SearchContextSize, []string{"low", "medium", "high"})
 	cfg.ReturnTokenBudget = normalizeOneOf(cfg.ReturnTokenBudget, []string{"default", "unlimited"})
+	cfg.GrokReasoningEffort = normalizeOneOf(cfg.GrokReasoningEffort, []string{"none", "low", "medium", "high"})
+
 	cfg.CodexInstruction = strings.TrimSpace(cfg.CodexInstruction)
 	cfg.GrokInstruction = strings.TrimSpace(cfg.GrokInstruction)
+
 	if cfg.CodexInstruction == "" {
 		cfg.CodexInstruction = defaultPluginConfig().CodexInstruction
 	}
 	if cfg.GrokInstruction == "" {
 		cfg.GrokInstruction = defaultPluginConfig().GrokInstruction
 	}
+	if cfg.GrokReasoningEffort == "" {
+		cfg.GrokReasoningEffort = defaultPluginConfig().GrokReasoningEffort
+	}
 	if strings.TrimSpace(cfg.ChatSearchModel) == "" {
 		cfg.ChatSearchModel = defaultPluginConfig().ChatSearchModel
 	}
+
 	currentConfig.Store(cfg)
 	return nil
 }
@@ -258,7 +269,7 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             pluginIdentifier,
-			Version:          "0.2.0",
+			Version:          "0.2.4",
 			Author:           "ewehiuw3743283478",
 			GitHubRepository: "https://github.com/ewehiuw3743283478/sandbox",
 			ConfigFields: []pluginapi.ConfigField{
@@ -276,7 +287,8 @@ func pluginRegistration() registration {
 				{Name: "force_overwrite_tool", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Replace existing tool definitions instead of preserving user-supplied options."},
 				{Name: "tool_choice_required", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Set tool_choice=required on Responses bodies."},
 				{Name: "set_parallel_tool_calls", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Set parallel_tool_calls=true."},
-				{Name: "max_tool_calls", Type: pluginapi.ConfigFieldTypeInteger, Description: "Set max_tool_calls when greater than zero."},
+				{Name: "max_tool_calls", Type: pluginapi.ConfigFieldTypeInteger, Description: "Set max_tool_calls for Grok/xAI requests only. Codex/OpenAI requests always remove this field."},
+				{Name: "grok_reasoning_effort", Type: pluginapi.ConfigFieldTypeString, Description: "xAI Grok reasoning.effort: none, low, medium, or high. Default: high."},
 				{Name: "search_context_size", Type: pluginapi.ConfigFieldTypeString, Description: "OpenAI Responses web_search context size: low, medium, or high."},
 				{Name: "return_token_budget", Type: pluginapi.ConfigFieldTypeString, Description: "OpenAI Responses web_search return_token_budget: default or unlimited."},
 				{Name: "disable_live_web_access", Type: pluginapi.ConfigFieldTypeBoolean, Description: "OpenAI: set external_web_access=false for cache/index-only web search."},
@@ -380,6 +392,11 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 					changed = true
 				}
 			}
+			if cfg.GrokReasoningEffort != "" {
+				if ensureReasoningEffort(obj, cfg.GrokReasoningEffort) {
+					changed = true
+				}
+			}
 		} else {
 			if ensureTool(obj, openAIWebSearchTool(cfg), cfg.ForceOverwriteTool) {
 				changed = true
@@ -400,6 +417,7 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 				}
 			}
 		}
+
 		if cfg.ToolChoiceRequired {
 			if old, ok := obj["tool_choice"].(string); !ok || old != "required" {
 				obj["tool_choice"] = "required"
@@ -412,7 +430,16 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 				changed = true
 			}
 		}
-		if cfg.MaxToolCalls > 0 {
+
+		// Important:
+		// Codex/OpenAI Responses through your current CLIProxyAPI path rejects max_tool_calls.
+		// Keep Grok behavior unchanged: Grok still receives max_tool_calls when configured.
+		if target == "codex" {
+			if _, exists := obj["max_tool_calls"]; exists {
+				delete(obj, "max_tool_calls")
+				changed = true
+			}
+		} else if cfg.MaxToolCalls > 0 {
 			if old, ok := obj["max_tool_calls"].(float64); !ok || int(old) != cfg.MaxToolCalls {
 				obj["max_tool_calls"] = cfg.MaxToolCalls
 				changed = true
@@ -434,6 +461,7 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 			}
 		}
 	}
+
 	if !changed {
 		return nil, false
 	}
@@ -541,6 +569,24 @@ func ensureTool(obj map[string]any, tool map[string]any, overwrite bool) bool {
 		}
 	}
 	obj["tools"] = append(rawTools, tool)
+	return true
+}
+
+func ensureReasoningEffort(obj map[string]any, effort string) bool {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	if effort == "" {
+		return false
+	}
+
+	if existing, ok := obj["reasoning"].(map[string]any); ok && existing != nil {
+		if old, _ := existing["effort"].(string); old == effort {
+			return false
+		}
+		existing["effort"] = effort
+		return true
+	}
+
+	obj["reasoning"] = map[string]any{"effort": effort}
 	return true
 }
 
