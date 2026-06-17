@@ -77,6 +77,13 @@ type pluginConfig struct {
 	AllowChatCompletions bool     `yaml:"allow_chat_completions"`
 	ForceOverwriteTool   bool     `yaml:"force_overwrite_tool"`
 
+	// Model-router controls.
+	EnableModelRouter bool   `yaml:"enable_model_router"`
+	CodexRouteProvider string `yaml:"codex_route_provider"`
+	GrokRouteProvider  string `yaml:"grok_route_provider"`
+	CodexRouteModel    string `yaml:"codex_route_model"`
+	GrokRouteModel     string `yaml:"grok_route_model"`
+
 	// Shared Responses controls.
 	ToolChoiceRequired   bool   `yaml:"tool_choice_required"`
 	SetParallelToolCalls bool   `yaml:"set_parallel_tool_calls"`
@@ -127,6 +134,7 @@ type registration struct {
 
 type registrationCapability struct {
 	RequestInterceptor bool `json:"request_interceptor"`
+	ModelRouter        bool `json:"model_router"`
 }
 
 func main() {}
@@ -185,6 +193,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, err
 		}
 		return okEnvelope(pluginRegistration())
+	case pluginabi.MethodModelRoute:
+		return routeModel(request)
 	case pluginabi.MethodRequestInterceptBefore:
 		return interceptRequest(request, "before")
 	case pluginabi.MethodRequestInterceptAfter:
@@ -197,9 +207,13 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
 		Enabled:              true,
+		ForceAllRequests:     true,
 		EnableCodex:          true,
 		EnableGrok:           true,
-		TargetCodexFormats:   []string{"codex"},
+		EnableModelRouter:    true,
+		CodexRouteProvider:   "codex",
+		GrokRouteProvider:    "xai",
+		TargetCodexFormats:   []string{"codex", "openai"},
 		TargetGrokFormats:    []string{"xai", "x-ai", "grok"},
 		TargetCodexModels:    []string{"gpt-5*", "gpt-4.1*", "o3*", "o4*"},
 		TargetGrokModels:     []string{"grok*", "grok-*", "xai/*", "x-ai/*"},
@@ -226,18 +240,24 @@ func configure(raw []byte) error {
 			return err
 		}
 	}
+
 	cfg := defaultPluginConfig()
 	if len(req.ConfigYAML) > 0 {
 		if err := yaml.Unmarshal(req.ConfigYAML, &cfg); err != nil {
 			return err
 		}
 	}
+
 	cfg.SearchContextSize = normalizeOneOf(cfg.SearchContextSize, []string{"low", "medium", "high"})
 	cfg.ReturnTokenBudget = normalizeOneOf(cfg.ReturnTokenBudget, []string{"default", "unlimited"})
 	cfg.GrokReasoningEffort = normalizeOneOf(cfg.GrokReasoningEffort, []string{"none", "low", "medium", "high"})
 
 	cfg.CodexInstruction = strings.TrimSpace(cfg.CodexInstruction)
 	cfg.GrokInstruction = strings.TrimSpace(cfg.GrokInstruction)
+	cfg.CodexRouteProvider = strings.ToLower(strings.TrimSpace(cfg.CodexRouteProvider))
+	cfg.GrokRouteProvider = strings.ToLower(strings.TrimSpace(cfg.GrokRouteProvider))
+	cfg.CodexRouteModel = strings.TrimSpace(cfg.CodexRouteModel)
+	cfg.GrokRouteModel = strings.TrimSpace(cfg.GrokRouteModel)
 
 	if cfg.CodexInstruction == "" {
 		cfg.CodexInstruction = defaultPluginConfig().CodexInstruction
@@ -247,6 +267,12 @@ func configure(raw []byte) error {
 	}
 	if cfg.GrokReasoningEffort == "" {
 		cfg.GrokReasoningEffort = defaultPluginConfig().GrokReasoningEffort
+	}
+	if cfg.CodexRouteProvider == "" {
+		cfg.CodexRouteProvider = defaultPluginConfig().CodexRouteProvider
+	}
+	if cfg.GrokRouteProvider == "" {
+		cfg.GrokRouteProvider = defaultPluginConfig().GrokRouteProvider
 	}
 	if strings.TrimSpace(cfg.ChatSearchModel) == "" {
 		cfg.ChatSearchModel = defaultPluginConfig().ChatSearchModel
@@ -269,16 +295,21 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             pluginIdentifier,
-			Version:          "0.2.4",
+			Version:          "0.2.5",
 			Author:           "ewehiuw3743283478",
 			GitHubRepository: "https://github.com/ewehiuw3743283478/sandbox",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable or disable this plugin."},
 				{Name: "enable_codex", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject OpenAI web_search into Codex/OpenAI Responses requests."},
 				{Name: "enable_grok", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject xAI web_search and x_search into Grok/xAI Responses requests."},
-				{Name: "force_all_requests", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject based on request body/model even without known format. Use carefully."},
-				{Name: "target_codex_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Format patterns that identify Codex/OpenAI requests. Default: codex."},
-				{Name: "target_grok_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Format patterns that identify Grok/xAI requests. Default: xai, x-ai, grok."},
+				{Name: "enable_model_router", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Route matching models to built-in codex/xai providers before provider/auth resolution."},
+				{Name: "codex_route_provider", Type: pluginapi.ConfigFieldTypeString, Description: "Built-in provider key for Codex/OpenAI routes. Default: codex."},
+				{Name: "grok_route_provider", Type: pluginapi.ConfigFieldTypeString, Description: "Built-in provider key for Grok/xAI routes. Default: xai."},
+				{Name: "codex_route_model", Type: pluginapi.ConfigFieldTypeString, Description: "Optional provider-native model override for Codex routes. Empty keeps original model."},
+				{Name: "grok_route_model", Type: pluginapi.ConfigFieldTypeString, Description: "Optional provider-native model override for Grok routes. Empty keeps original model."},
+				{Name: "force_all_requests", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject based on request body/model even without known format."},
+				{Name: "target_codex_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Format patterns that identify Codex/OpenAI requests."},
+				{Name: "target_grok_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Format patterns that identify Grok/xAI requests."},
 				{Name: "target_codex_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model patterns that identify OpenAI/Codex requests."},
 				{Name: "target_grok_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model patterns that identify Grok/xAI requests."},
 				{Name: "inject_before_auth", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Rewrite before credential selection. Usually false."},
@@ -311,8 +342,59 @@ func pluginRegistration() registration {
 				{Name: "grok_instruction", Type: pluginapi.ConfigFieldTypeString, Description: "Instruction injected into Grok/xAI requests."},
 			},
 		},
-		Capabilities: registrationCapability{RequestInterceptor: true},
+		Capabilities: registrationCapability{
+			RequestInterceptor: true,
+			ModelRouter:        true,
+		},
 	}
+}
+
+func routeModel(raw []byte) ([]byte, error) {
+	var req pluginapi.ModelRouteRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+
+	cfg := loadedConfig()
+	if !cfg.Enabled || !cfg.EnableModelRouter {
+		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
+	}
+
+	requestedModel := firstNonEmpty(req.RequestedModel, bodyModelName(req.Body))
+	if requestedModel == "" {
+		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
+	}
+
+	format := strings.ToLower(strings.TrimSpace(req.SourceFormat))
+	modelCandidates := []string{requestedModel}
+
+	if cfg.EnableGrok && (matchesAnyPattern([]string{format}, cfg.TargetGrokFormats) || matchesAnyPattern(modelCandidates, cfg.TargetGrokModels)) {
+		if hasProvider(req.AvailableProviders, cfg.GrokRouteProvider) {
+			return okEnvelope(pluginapi.ModelRouteResponse{
+				Handled:     true,
+				TargetKind:  pluginapi.ModelRouteTargetProvider,
+				Target:      cfg.GrokRouteProvider,
+				TargetModel: routeModelName(cfg.GrokRouteModel, requestedModel),
+				Reason:      "matched_grok_force_search",
+			})
+		}
+		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
+	}
+
+	if cfg.EnableCodex && (matchesAnyPattern([]string{format}, cfg.TargetCodexFormats) || matchesAnyPattern(modelCandidates, cfg.TargetCodexModels)) {
+		if hasProvider(req.AvailableProviders, cfg.CodexRouteProvider) {
+			return okEnvelope(pluginapi.ModelRouteResponse{
+				Handled:     true,
+				TargetKind:  pluginapi.ModelRouteTargetProvider,
+				Target:      cfg.CodexRouteProvider,
+				TargetModel: routeModelName(cfg.CodexRouteModel, requestedModel),
+				Reason:      "matched_codex_force_web_search",
+			})
+		}
+		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
+	}
+
+	return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
 }
 
 func interceptRequest(raw []byte, phase string) ([]byte, error) {
@@ -320,24 +402,30 @@ func interceptRequest(raw []byte, phase string) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+
 	cfg := loadedConfig()
 	if !cfg.Enabled || (phase == "before" && !cfg.InjectBeforeAuth) || (phase == "after" && !cfg.InjectAfterAuth) {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
+
 	target := targetKind(cfg, req)
 	if target == "" {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
+
 	nextBody, changed := mutateJSONBody(cfg, req.Body, target)
 	if !changed {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
+
 	return okEnvelope(pluginapi.RequestInterceptResponse{Body: nextBody})
 }
 
 func targetKind(cfg pluginConfig, req pluginapi.RequestInterceptRequest) string {
+	bodyModel := bodyModelName(req.Body)
 	formats := []string{req.SourceFormat, req.ToFormat}
-	models := []string{req.Model, req.RequestedModel}
+	models := []string{req.Model, req.RequestedModel, bodyModel}
+
 	if cfg.EnableGrok && (matchesAnyPattern(formats, cfg.TargetGrokFormats) || matchesAnyPattern(models, cfg.TargetGrokModels)) {
 		return "grok"
 	}
@@ -347,11 +435,10 @@ func targetKind(cfg pluginConfig, req pluginapi.RequestInterceptRequest) string 
 	if !cfg.ForceAllRequests {
 		return ""
 	}
-	bodyModel := bodyModelName(req.Body)
-	if cfg.EnableGrok && matchesAnyPattern([]string{bodyModel}, cfg.TargetGrokModels) {
+	if cfg.EnableGrok && strings.Contains(strings.ToLower(bodyModel), "grok") {
 		return "grok"
 	}
-	if cfg.EnableCodex && matchesAnyPattern([]string{bodyModel}, cfg.TargetCodexModels) {
+	if cfg.EnableCodex && bodyModel != "" {
 		return "codex"
 	}
 	return ""
@@ -379,6 +466,7 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 	}
 
 	changed := false
+
 	if hasInput {
 		if target == "grok" {
 			if ensureTool(obj, grokWebSearchTool(cfg), cfg.ForceOverwriteTool) {
@@ -424,6 +512,7 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 				changed = true
 			}
 		}
+
 		if cfg.SetParallelToolCalls {
 			if old, ok := obj["parallel_tool_calls"].(bool); !ok || !old {
 				obj["parallel_tool_calls"] = true
@@ -431,9 +520,8 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 			}
 		}
 
-		// Important:
-		// Codex/OpenAI Responses through your current CLIProxyAPI path rejects max_tool_calls.
-		// Keep Grok behavior unchanged: Grok still receives max_tool_calls when configured.
+		// Codex/OpenAI route rejects max_tool_calls in your current path.
+		// Grok behavior is unchanged: Grok still receives max_tool_calls when configured.
 		if target == "codex" {
 			if _, exists := obj["max_tool_calls"]; exists {
 				delete(obj, "max_tool_calls")
@@ -465,15 +553,18 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 	if !changed {
 		return nil, false
 	}
+
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return nil, false
 	}
+
 	return out, true
 }
 
 func openAIWebSearchTool(cfg pluginConfig) map[string]any {
 	tool := map[string]any{"type": "web_search"}
+
 	if cfg.SearchContextSize != "" {
 		tool["search_context_size"] = cfg.SearchContextSize
 	}
@@ -483,6 +574,7 @@ func openAIWebSearchTool(cfg pluginConfig) map[string]any {
 	if cfg.DisableLiveWebAccess {
 		tool["external_web_access"] = false
 	}
+
 	filters := map[string]any{}
 	if len(cfg.AllowedDomains) > 0 {
 		filters["allowed_domains"] = limitStrings(cleanDomains(cfg.AllowedDomains), 100)
@@ -493,6 +585,7 @@ func openAIWebSearchTool(cfg pluginConfig) map[string]any {
 	if len(filters) > 0 {
 		tool["filters"] = filters
 	}
+
 	if cfg.EnableOpenAIImageSearch {
 		tool["search_content_types"] = []string{"text", "image"}
 		imageSettings := map[string]any{}
@@ -506,11 +599,13 @@ func openAIWebSearchTool(cfg pluginConfig) map[string]any {
 			tool["image_settings"] = imageSettings
 		}
 	}
+
 	return tool
 }
 
 func grokWebSearchTool(cfg pluginConfig) map[string]any {
 	tool := map[string]any{"type": "web_search"}
+
 	filters := map[string]any{}
 	if len(cfg.GrokAllowedDomains) > 0 {
 		filters["allowed_domains"] = limitStrings(cleanDomains(cfg.GrokAllowedDomains), 5)
@@ -520,22 +615,26 @@ func grokWebSearchTool(cfg pluginConfig) map[string]any {
 	if len(filters) > 0 {
 		tool["filters"] = filters
 	}
+
 	if cfg.GrokEnableImageUnderstanding {
 		tool["enable_image_understanding"] = true
 	}
 	if cfg.GrokEnableImageSearch {
 		tool["enable_image_search"] = true
 	}
+
 	return tool
 }
 
 func grokXSearchTool(cfg pluginConfig) map[string]any {
 	tool := map[string]any{"type": "x_search"}
+
 	if len(cfg.GrokAllowedXHandles) > 0 {
 		tool["allowed_x_handles"] = limitStrings(cleanHandles(cfg.GrokAllowedXHandles), 20)
 	} else if len(cfg.GrokExcludedXHandles) > 0 {
 		tool["excluded_x_handles"] = limitStrings(cleanHandles(cfg.GrokExcludedXHandles), 20)
 	}
+
 	if strings.TrimSpace(cfg.GrokFromDate) != "" {
 		tool["from_date"] = strings.TrimSpace(cfg.GrokFromDate)
 	}
@@ -548,12 +647,14 @@ func grokXSearchTool(cfg pluginConfig) map[string]any {
 	if cfg.GrokXEnableVideoUnderstanding {
 		tool["enable_video_understanding"] = true
 	}
+
 	return tool
 }
 
 func ensureTool(obj map[string]any, tool map[string]any, overwrite bool) bool {
 	toolType, _ := tool["type"].(string)
 	rawTools, _ := obj["tools"].([]any)
+
 	for i, existing := range rawTools {
 		existingMap, ok := existing.(map[string]any)
 		if !ok {
@@ -568,6 +669,7 @@ func ensureTool(obj map[string]any, tool map[string]any, overwrite bool) bool {
 			return false
 		}
 	}
+
 	obj["tools"] = append(rawTools, tool)
 	return true
 }
@@ -626,6 +728,7 @@ func addChatSystemInstruction(obj map[string]any, instruction string) bool {
 	if !ok {
 		return false
 	}
+
 	for _, msg := range rawMessages {
 		m, ok := msg.(map[string]any)
 		if !ok {
@@ -643,8 +746,40 @@ func addChatSystemInstruction(obj map[string]any, instruction string) bool {
 			return true
 		}
 	}
+
 	obj["messages"] = append([]any{map[string]any{"role": "system", "content": instruction}}, rawMessages...)
 	return true
+}
+
+func hasProvider(providers []string, target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		return false
+	}
+	for _, provider := range providers {
+		if strings.ToLower(strings.TrimSpace(provider)) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func routeModelName(override string, fallback string) string {
+	override = strings.TrimSpace(override)
+	if override != "" {
+		return override
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func matchesAnyPattern(candidates []string, patterns []string) bool {
@@ -723,13 +858,16 @@ func wildcardMatch(pattern, value string) bool {
 	if pattern == "*" {
 		return true
 	}
+
 	parts := strings.Split(pattern, "*")
 	if len(parts) == 1 {
 		return pattern == value
 	}
+
 	if !strings.HasPrefix(value, parts[0]) {
 		return false
 	}
+
 	pos := len(parts[0])
 	for _, part := range parts[1 : len(parts)-1] {
 		if part == "" {
@@ -741,6 +879,7 @@ func wildcardMatch(pattern, value string) bool {
 		}
 		pos += idx + len(part)
 	}
+
 	last := parts[len(parts)-1]
 	return last == "" || strings.HasSuffix(value, last)
 }
@@ -769,10 +908,12 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	if response == nil || len(raw) == 0 {
 		return
 	}
+
 	ptr := C.CBytes(raw)
 	if ptr == nil {
 		return
 	}
+
 	response.ptr = ptr
 	response.len = C.size_t(len(raw))
 }
