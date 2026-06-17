@@ -42,7 +42,7 @@ plugins:
       # Codex CLI should normally use Responses API (`wire_api = "responses"`).
       allow_chat_completions: false
       rewrite_chat_to_search_model: false
-      chat_search_model: "gpt-5.4"
+      chat_search_model: "gpt-5.4-mini"
 
       # Shared Responses controls.
       tool_choice_required: true
