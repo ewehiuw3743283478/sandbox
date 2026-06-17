@@ -46,7 +46,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
-          cache: false
+          cache: true
+          cache-dependency-path: go/go.sum
 
       - name: Resolve release metadata
         env:
@@ -72,8 +73,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
-          go env
-          go mod download
+          go mod tidy
           mkdir -p ../dist
           go build -trimpath -buildmode=c-shared \
             -ldflags "-s -w" \
@@ -84,7 +84,6 @@ jobs:
       - name: Package plugin-store archive
         run: |
           set -euo pipefail
-          # CLIProxyAPI plugin-store archives must contain the dynamic library at zip root.
           (cd dist && zip -9 "../${ARCHIVE_NAME}" "${LIB_NAME}")
           sha256sum "${ARCHIVE_NAME}" > "${ARCHIVE_NAME}.sha256"
 
@@ -104,6 +103,7 @@ jobs:
     defaults:
       run:
         shell: bash
+
     steps:
       - name: Resolve release tag
         env:
@@ -143,4 +143,3 @@ jobs:
               --target "${GITHUB_SHA}" \
               --title "${TAG}" \
               --notes "Automated CLIProxyAPI plugin-store release for ${TAG}."
-          fi
