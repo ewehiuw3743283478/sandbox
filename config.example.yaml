@@ -1,0 +1,57 @@
+plugins:
+  enabled: true
+  dir: "plugins"
+
+  # After uploading this repo to GitHub and running ./scripts/render-registry.sh,
+  # paste your raw registry URL here:
+  store-sources:
+    - "https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/registry.json"
+
+  configs:
+    codex-force-websearch:
+      enabled: true
+      priority: 50
+
+      # Default: only mutate requests that CLIProxyAPI identifies as Codex format.
+      force_all_requests: false
+      require_codex_format: true
+      target_formats:
+        - "codex"
+      target_models:
+        - "gpt-5*"
+        - "gpt-4.1*"
+        - "o3*"
+        - "o4*"
+
+      # Most useful phase for Codex provider payloads.
+      inject_before_auth: false
+      inject_after_auth: true
+
+      # Codex CLI should normally use Responses API (`wire_api = "responses"`).
+      allow_chat_completions: false
+      rewrite_chat_to_search_model: false
+      chat_search_model: "gpt-5-search-api"
+
+      # Force the hosted OpenAI web_search tool on Responses API requests.
+      tool_choice_required: true
+      set_parallel_tool_calls: true
+      max_tool_calls: 4
+      search_context_size: "medium" # low | medium | high
+      # return_token_budget: "unlimited" # optional; higher latency/cost
+      include_action_sources: true
+      include_raw_results: false
+      add_instruction: true
+      instruction: >-
+        For any question that may require current, external, API, package,
+        repository, changelog, security, pricing, policy, or source-grounded
+        information, use the hosted web_search tool before answering. Prefer
+        official documentation and primary sources. Include citations when the
+        response format supports them.
+
+      # Optional Responses web_search controls:
+      # allowed_domains: ["openai.com", "developers.openai.com", "github.com"]
+      # blocked_domains: ["reddit.com", "quora.com"]
+      # disable_live_web_access: false
+      # enable_image_search: false
+      # image_max_results: 3
+      # image_captions: true

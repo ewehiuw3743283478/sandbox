@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "codex-force-websearch",
+      "name": "Codex Force Web Search",
+      "description": "CLIProxyAPI request interceptor that injects OpenAI Responses API web_search into Codex requests and sets tool_choice=required.",
+      "author": "YOUR_GITHUB_USER",
+      "version": "0.1.0",
+      "repository": "https://github.com/YOUR_GITHUB_USER/codex-force-websearch-plugin-store",
+      "homepage": "https://github.com/YOUR_GITHUB_USER/codex-force-websearch-plugin-store",
+      "license": "MIT",
+      "tags": ["codex", "openai", "web_search", "request-interceptor"]
+    }
+  ]
+}
