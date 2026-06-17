@@ -22,9 +22,7 @@ plugins:
         - "codex"
       target_codex_models:
         - "gpt-5*"
-        - "gpt-4.1*"
-        - "o3*"
-        - "o4*"
+
 
       # CLIProxyAPI xAI/Grok may appear as xai, x-ai, grok, or just a grok-* model.
       target_grok_formats:
@@ -44,7 +42,7 @@ plugins:
       # Codex CLI should normally use Responses API (`wire_api = "responses"`).
       allow_chat_completions: false
       rewrite_chat_to_search_model: false
-      chat_search_model: "gpt-5-search-api"
+      chat_search_model: "gpt-5.4"
 
       # Shared Responses controls.
       tool_choice_required: true
@@ -53,7 +51,7 @@ plugins:
       add_instruction: true
 
       # Codex/OpenAI: inject {"type":"web_search"}.
-      search_context_size: "medium" # low | medium | high
+      search_context_size: "high" # low | medium | high
       include_action_sources: true
       include_raw_results: false
       # return_token_budget: "unlimited" # optional; higher latency/cost
@@ -75,14 +73,14 @@ plugins:
       # grok_allowed_domains: ["x.ai", "docs.x.ai", "github.com"]
       # grok_excluded_domains: ["reddit.com", "quora.com"]
       grok_enable_image_understanding: false
-      grok_enable_image_search: false
+      grok_enable_image_search: true
 
       # xAI X Search options. Use handles without @. Allowed/excluded are mutually exclusive, max 20.
       # grok_allowed_x_handles: ["xai", "grok"]
       # grok_excluded_x_handles: ["example"]
       # grok_from_date: "2026-01-01"
       # grok_to_date: "2026-06-16"
-      grok_x_enable_image_understanding: false
+      grok_x_enable_image_understanding: true
       grok_x_enable_video_understanding: false
       grok_instruction: >-
         For any question that may require current, external, social/X, API,
