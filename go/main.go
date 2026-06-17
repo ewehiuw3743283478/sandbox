@@ -228,7 +228,7 @@ func pluginRegistration() registration {
 			Name:             pluginIdentifier,
 			Version:          "0.1.0",
 			Author:           "local",
-			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
+			GitHubRepository: "https://github.com/ewehiuw3743283478/sandbox",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable or disable this plugin."},
 				{Name: "force_all_requests", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject web search into every intercepted request. Dangerous for non-Codex providers."},
