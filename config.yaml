@@ -1,0 +1,93 @@
+plugins:
+  enabled: true
+  dir: "plugins"
+
+  # After uploading this repo to GitHub and running ./scripts/render-registry.sh,
+  # paste your raw registry URL here:
+  store-sources:
+    - "https://raw.githubusercontent.com/ewehiuw3743283478/sandbox/main/registry.json"
+
+  configs:
+    codex-grok-force-search:
+      enabled: true
+      priority: 50
+
+      # One plugin, two target families.
+      enable_codex: true
+      enable_grok: true
+      force_all_requests: false
+
+      # CLIProxyAPI usually exposes Codex as to_format/source_format = codex.
+      target_codex_formats:
+        - "codex"
+      target_codex_models:
+        - "gpt-5*"
+        - "gpt-4.1*"
+        - "o3*"
+        - "o4*"
+
+      # CLIProxyAPI xAI/Grok may appear as xai, x-ai, grok, or just a grok-* model.
+      target_grok_formats:
+        - "xai"
+        - "x-ai"
+        - "grok"
+      target_grok_models:
+        - "grok*"
+        - "grok-*"
+        - "xai/*"
+        - "x-ai/*"
+
+      # Most useful phase for provider-normalized payloads.
+      inject_before_auth: false
+      inject_after_auth: true
+
+      # Codex CLI should normally use Responses API (`wire_api = "responses"`).
+      allow_chat_completions: false
+      rewrite_chat_to_search_model: false
+      chat_search_model: "gpt-5-search-api"
+
+      # Shared Responses controls.
+      tool_choice_required: true
+      set_parallel_tool_calls: true
+      max_tool_calls: 6
+      add_instruction: true
+
+      # Codex/OpenAI: inject {"type":"web_search"}.
+      search_context_size: "medium" # low | medium | high
+      include_action_sources: true
+      include_raw_results: false
+      # return_token_budget: "unlimited" # optional; higher latency/cost
+      # allowed_domains: ["openai.com", "developers.openai.com", "github.com"]
+      # blocked_domains: ["reddit.com", "quora.com"]
+      # disable_live_web_access: false
+      # enable_openai_image_search: false
+      # image_max_results: 3
+      # image_captions: true
+      codex_instruction: >-
+        For any question that may require current, external, API, package,
+        repository, changelog, security, pricing, policy, or source-grounded
+        information, use the hosted web_search tool before answering. Prefer
+        official documentation and primary sources. Include citations when the
+        response format supports them.
+
+      # Grok/xAI: inject {"type":"web_search"} and {"type":"x_search"}.
+      # xAI allows either allowed or excluded domains, not both, max 5.
+      # grok_allowed_domains: ["x.ai", "docs.x.ai", "github.com"]
+      # grok_excluded_domains: ["reddit.com", "quora.com"]
+      grok_enable_image_understanding: false
+      grok_enable_image_search: false
+
+      # xAI X Search options. Use handles without @. Allowed/excluded are mutually exclusive, max 20.
+      # grok_allowed_x_handles: ["xai", "grok"]
+      # grok_excluded_x_handles: ["example"]
+      # grok_from_date: "2026-01-01"
+      # grok_to_date: "2026-06-16"
+      grok_x_enable_image_understanding: false
+      grok_x_enable_video_understanding: false
+      grok_instruction: >-
+        For any question that may require current, external, social/X, API,
+        package, repository, changelog, security, pricing, policy, or
+        source-grounded information, use both web_search and x_search before
+        answering when available. Prefer official documentation, primary
+        sources, and relevant X posts. Include citations when the response
+        format supports them.

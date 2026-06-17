@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "codex-grok-force-search",
+      "name": "Codex + Grok Force Search",
+      "description": "CLIProxyAPI request interceptor that injects OpenAI web_search for Codex/OpenAI Responses and xAI web_search + x_search for Grok/xAI Responses.",
+      "author": "ewehiuw3743283478",
+      "version": "0.2.0",
+      "repository": "https://github.com/ewehiuw3743283478/sandbox",
+      "homepage": "https://github.com/ewehiuw3743283478/sandbox",
+      "license": "MIT",
+      "tags": ["request-interceptor", "codex", "openai", "grok", "xai", "web-search", "x-search"]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "force-search-policy",
+  "version": "0.2.0",
+  "description": "Reusable Codex skill that instructs Codex to use web search and primary sources for current or source-grounded tasks.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Force Search Policy",
+    "shortDescription": "Encourages web search and citations for current/source-grounded Codex tasks.",
+    "longDescription": "A lightweight Codex skill bundle. This does not alter API payloads; use the CLIProxyAPI native plugin for request-level enforcement. Grok enforcement is handled by the CLIProxyAPI plugin, not this Codex-only skill.",
+    "developerName": "local",
+    "category": "Developer Tools",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "Use Force Search Policy while researching this issue.",
+      "Use Force Search Policy before changing dependencies or relying on current docs."
+    ]
+  }
+}
