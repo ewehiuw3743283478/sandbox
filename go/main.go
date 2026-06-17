@@ -77,13 +77,6 @@ type pluginConfig struct {
 	AllowChatCompletions bool     `yaml:"allow_chat_completions"`
 	ForceOverwriteTool   bool     `yaml:"force_overwrite_tool"`
 
-	// Model-router controls.
-	EnableModelRouter bool   `yaml:"enable_model_router"`
-	CodexRouteProvider string `yaml:"codex_route_provider"`
-	GrokRouteProvider  string `yaml:"grok_route_provider"`
-	CodexRouteModel    string `yaml:"codex_route_model"`
-	GrokRouteModel     string `yaml:"grok_route_model"`
-
 	// Shared Responses controls.
 	ToolChoiceRequired   bool   `yaml:"tool_choice_required"`
 	SetParallelToolCalls bool   `yaml:"set_parallel_tool_calls"`
@@ -92,8 +85,13 @@ type pluginConfig struct {
 	CodexInstruction     string `yaml:"codex_instruction"`
 	GrokInstruction      string `yaml:"grok_instruction"`
 
-	// xAI/Grok reasoning control.
-	GrokReasoningEffort string `yaml:"grok_reasoning_effort"`
+	// Reasoning controls.
+	// Codex/OpenAI defaults to "high".
+	// Grok defaults to "max", which maps safely by model:
+	//   normal Grok -> high
+	//   multi-agent Grok -> xhigh
+	CodexReasoningEffort string `yaml:"codex_reasoning_effort"`
+	GrokReasoningEffort  string `yaml:"grok_reasoning_effort"`
 
 	// OpenAI/Codex hosted web_search options.
 	SearchContextSize       string   `yaml:"search_context_size"`
@@ -134,7 +132,6 @@ type registration struct {
 
 type registrationCapability struct {
 	RequestInterceptor bool `json:"request_interceptor"`
-	ModelRouter        bool `json:"model_router"`
 }
 
 func main() {}
@@ -193,8 +190,6 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, err
 		}
 		return okEnvelope(pluginRegistration())
-	case pluginabi.MethodModelRoute:
-		return routeModel(request)
 	case pluginabi.MethodRequestInterceptBefore:
 		return interceptRequest(request, "before")
 	case pluginabi.MethodRequestInterceptAfter:
@@ -206,30 +201,58 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 
 func defaultPluginConfig() pluginConfig {
 	return pluginConfig{
-		Enabled:              true,
-		ForceAllRequests:     true,
-		EnableCodex:          true,
-		EnableGrok:           true,
-		EnableModelRouter:    true,
-		CodexRouteProvider:   "codex",
-		GrokRouteProvider:    "xai",
-		TargetCodexFormats:   []string{"codex", "openai"},
-		TargetGrokFormats:    []string{"xai", "x-ai", "grok"},
-		TargetCodexModels:    []string{"gpt-5*"},
-		TargetGrokModels:     []string{"*"},
+		Enabled:          true,
+		ForceAllRequests: true,
+		EnableCodex:      true,
+		EnableGrok:       true,
+
+		TargetCodexFormats: []string{"codex", "openai"},
+		TargetGrokFormats:  []string{"xai", "x-ai", "grok"},
+
+		// OpenAI/Codex: only GPT-5 family by default.
+		TargetCodexModels: []string{
+			"gpt-5*",
+		},
+
+		// xAI/Grok: broad matching for current/future Grok aliases and specialized models.
+		TargetGrokModels: []string{
+			"grok*",
+			"grok-*",
+			"grok.*",
+			"grok-com*",
+			"grok-code*",
+			"grok-build*",
+			"grok-4*",
+			"grok-5*",
+			"xai/*",
+			"x-ai/*",
+		},
+
 		InjectBeforeAuth:     false,
 		InjectAfterAuth:      true,
 		AllowChatCompletions: false,
 		ToolChoiceRequired:   true,
 		SetParallelToolCalls: true,
-		MaxToolCalls:         6,
-		AddInstruction:       true,
-		GrokReasoningEffort:  "high",
+
+		// Grok only. Codex/OpenAI requests always remove max_tool_calls.
+		MaxToolCalls: 6,
+
+		AddInstruction: true,
+
+		// User preference:
+		// GPT/Codex only needs high.
+		// Grok should request max, resolved safely by model.
+		CodexReasoningEffort: "high",
+		GrokReasoningEffort:  "max",
+
 		SearchContextSize:    "medium",
 		IncludeActionSources: true,
-		ChatSearchModel:      "gpt-5.4",
-		CodexInstruction:     "For any question that may require current, external, API, package, repository, changelog, security, pricing, policy, or source-grounded information, use the hosted web_search tool before answering. Prefer official documentation and primary sources. Include citations when the response format supports them.",
-		GrokInstruction:      "For any question that may require current, external, social/X, API, package, repository, changelog, security, pricing, policy, or source-grounded information, use both web_search and x_search before answering when available. Prefer official documentation, primary sources, and relevant X posts. Include citations when the response format supports them.",
+
+		// Fallback only if allow_chat_completions is enabled.
+		ChatSearchModel: "gpt-5.4-mini",
+
+		CodexInstruction: "For any question that may require current, external, API, package, repository, changelog, security, pricing, policy, or source-grounded information, use the hosted web_search tool before answering. Prefer official documentation and primary sources. Include citations when the response format supports them.",
+		GrokInstruction:  "For any question that may require current, external, social/X, API, package, repository, changelog, security, pricing, policy, or source-grounded information, use both web_search and x_search before answering when available. Prefer official documentation, primary sources, and relevant X posts. Include citations when the response format supports them.",
 	}
 }
 
@@ -250,14 +273,11 @@ func configure(raw []byte) error {
 
 	cfg.SearchContextSize = normalizeOneOf(cfg.SearchContextSize, []string{"low", "medium", "high"})
 	cfg.ReturnTokenBudget = normalizeOneOf(cfg.ReturnTokenBudget, []string{"default", "unlimited"})
-	cfg.GrokReasoningEffort = normalizeOneOf(cfg.GrokReasoningEffort, []string{"none", "low", "medium", "high"})
+	cfg.CodexReasoningEffort = normalizeReasoningConfig(cfg.CodexReasoningEffort)
+	cfg.GrokReasoningEffort = normalizeReasoningConfig(cfg.GrokReasoningEffort)
 
 	cfg.CodexInstruction = strings.TrimSpace(cfg.CodexInstruction)
 	cfg.GrokInstruction = strings.TrimSpace(cfg.GrokInstruction)
-	cfg.CodexRouteProvider = strings.ToLower(strings.TrimSpace(cfg.CodexRouteProvider))
-	cfg.GrokRouteProvider = strings.ToLower(strings.TrimSpace(cfg.GrokRouteProvider))
-	cfg.CodexRouteModel = strings.TrimSpace(cfg.CodexRouteModel)
-	cfg.GrokRouteModel = strings.TrimSpace(cfg.GrokRouteModel)
 
 	if cfg.CodexInstruction == "" {
 		cfg.CodexInstruction = defaultPluginConfig().CodexInstruction
@@ -265,14 +285,11 @@ func configure(raw []byte) error {
 	if cfg.GrokInstruction == "" {
 		cfg.GrokInstruction = defaultPluginConfig().GrokInstruction
 	}
+	if cfg.CodexReasoningEffort == "" {
+		cfg.CodexReasoningEffort = defaultPluginConfig().CodexReasoningEffort
+	}
 	if cfg.GrokReasoningEffort == "" {
 		cfg.GrokReasoningEffort = defaultPluginConfig().GrokReasoningEffort
-	}
-	if cfg.CodexRouteProvider == "" {
-		cfg.CodexRouteProvider = defaultPluginConfig().CodexRouteProvider
-	}
-	if cfg.GrokRouteProvider == "" {
-		cfg.GrokRouteProvider = defaultPluginConfig().GrokRouteProvider
 	}
 	if strings.TrimSpace(cfg.ChatSearchModel) == "" {
 		cfg.ChatSearchModel = defaultPluginConfig().ChatSearchModel
@@ -295,23 +312,18 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             pluginIdentifier,
-			Version:          "0.2.5",
+			Version:          "0.2.7",
 			Author:           "ewehiuw3743283478",
 			GitHubRepository: "https://github.com/ewehiuw3743283478/sandbox",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable or disable this plugin."},
-				{Name: "enable_codex", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject OpenAI web_search into Codex/OpenAI Responses requests."},
+				{Name: "enable_codex", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject OpenAI web_search into GPT-5/Codex/OpenAI Responses requests."},
 				{Name: "enable_grok", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject xAI web_search and x_search into Grok/xAI Responses requests."},
-				{Name: "enable_model_router", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Route matching models to built-in codex/xai providers before provider/auth resolution."},
-				{Name: "codex_route_provider", Type: pluginapi.ConfigFieldTypeString, Description: "Built-in provider key for Codex/OpenAI routes. Default: codex."},
-				{Name: "grok_route_provider", Type: pluginapi.ConfigFieldTypeString, Description: "Built-in provider key for Grok/xAI routes. Default: xai."},
-				{Name: "codex_route_model", Type: pluginapi.ConfigFieldTypeString, Description: "Optional provider-native model override for Codex routes. Empty keeps original model."},
-				{Name: "grok_route_model", Type: pluginapi.ConfigFieldTypeString, Description: "Optional provider-native model override for Grok routes. Empty keeps original model."},
 				{Name: "force_all_requests", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Inject based on request body/model even without known format."},
 				{Name: "target_codex_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Format patterns that identify Codex/OpenAI requests."},
 				{Name: "target_grok_formats", Type: pluginapi.ConfigFieldTypeArray, Description: "Format patterns that identify Grok/xAI requests."},
-				{Name: "target_codex_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model patterns that identify OpenAI/Codex requests."},
-				{Name: "target_grok_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model patterns that identify Grok/xAI requests."},
+				{Name: "target_codex_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model patterns that identify GPT/Codex requests. Default: gpt-5* only."},
+				{Name: "target_grok_models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model patterns that identify Grok/xAI requests, including grok-com*, grok-code*, grok-build*, grok-4*, grok-5*."},
 				{Name: "inject_before_auth", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Rewrite before credential selection. Usually false."},
 				{Name: "inject_after_auth", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Rewrite after credential selection. Usually true."},
 				{Name: "allow_chat_completions", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Also mutate Chat Completions-shaped bodies for OpenAI search-model fallback."},
@@ -319,7 +331,8 @@ func pluginRegistration() registration {
 				{Name: "tool_choice_required", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Set tool_choice=required on Responses bodies."},
 				{Name: "set_parallel_tool_calls", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Set parallel_tool_calls=true."},
 				{Name: "max_tool_calls", Type: pluginapi.ConfigFieldTypeInteger, Description: "Set max_tool_calls for Grok/xAI requests only. Codex/OpenAI requests always remove this field."},
-				{Name: "grok_reasoning_effort", Type: pluginapi.ConfigFieldTypeString, Description: "xAI Grok reasoning.effort: none, low, medium, or high. Default: high."},
+				{Name: "codex_reasoning_effort", Type: pluginapi.ConfigFieldTypeString, Description: "OpenAI/Codex reasoning effort: none, low, medium, high, xhigh, or max. Default: high."},
+				{Name: "grok_reasoning_effort", Type: pluginapi.ConfigFieldTypeString, Description: "xAI Grok reasoning effort: none, low, medium, high, xhigh, or max. Default: max; max maps to high for normal Grok and xhigh for multi-agent."},
 				{Name: "search_context_size", Type: pluginapi.ConfigFieldTypeString, Description: "OpenAI Responses web_search context size: low, medium, or high."},
 				{Name: "return_token_budget", Type: pluginapi.ConfigFieldTypeString, Description: "OpenAI Responses web_search return_token_budget: default or unlimited."},
 				{Name: "disable_live_web_access", Type: pluginapi.ConfigFieldTypeBoolean, Description: "OpenAI: set external_web_access=false for cache/index-only web search."},
@@ -344,57 +357,8 @@ func pluginRegistration() registration {
 		},
 		Capabilities: registrationCapability{
 			RequestInterceptor: true,
-			ModelRouter:        true,
 		},
 	}
-}
-
-func routeModel(raw []byte) ([]byte, error) {
-	var req pluginapi.ModelRouteRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, err
-	}
-
-	cfg := loadedConfig()
-	if !cfg.Enabled || !cfg.EnableModelRouter {
-		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
-	}
-
-	requestedModel := firstNonEmpty(req.RequestedModel, bodyModelName(req.Body))
-	if requestedModel == "" {
-		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
-	}
-
-	format := strings.ToLower(strings.TrimSpace(req.SourceFormat))
-	modelCandidates := []string{requestedModel}
-
-	if cfg.EnableGrok && (matchesAnyPattern([]string{format}, cfg.TargetGrokFormats) || matchesAnyPattern(modelCandidates, cfg.TargetGrokModels)) {
-		if hasProvider(req.AvailableProviders, cfg.GrokRouteProvider) {
-			return okEnvelope(pluginapi.ModelRouteResponse{
-				Handled:     true,
-				TargetKind:  pluginapi.ModelRouteTargetProvider,
-				Target:      cfg.GrokRouteProvider,
-				TargetModel: routeModelName(cfg.GrokRouteModel, requestedModel),
-				Reason:      "matched_grok_force_search",
-			})
-		}
-		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
-	}
-
-	if cfg.EnableCodex && (matchesAnyPattern([]string{format}, cfg.TargetCodexFormats) || matchesAnyPattern(modelCandidates, cfg.TargetCodexModels)) {
-		if hasProvider(req.AvailableProviders, cfg.CodexRouteProvider) {
-			return okEnvelope(pluginapi.ModelRouteResponse{
-				Handled:     true,
-				TargetKind:  pluginapi.ModelRouteTargetProvider,
-				Target:      cfg.CodexRouteProvider,
-				TargetModel: routeModelName(cfg.CodexRouteModel, requestedModel),
-				Reason:      "matched_codex_force_web_search",
-			})
-		}
-		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
-	}
-
-	return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
 }
 
 func interceptRequest(raw []byte, phase string) ([]byte, error) {
@@ -438,7 +402,7 @@ func targetKind(cfg pluginConfig, req pluginapi.RequestInterceptRequest) string 
 	if cfg.EnableGrok && strings.Contains(strings.ToLower(bodyModel), "grok") {
 		return "grok"
 	}
-	if cfg.EnableCodex && bodyModel != "" {
+	if cfg.EnableCodex && matchesAnyPattern([]string{bodyModel}, cfg.TargetCodexModels) {
 		return "codex"
 	}
 	return ""
@@ -481,7 +445,8 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 				}
 			}
 			if cfg.GrokReasoningEffort != "" {
-				if ensureReasoningEffort(obj, cfg.GrokReasoningEffort) {
+				effort := resolveReasoningEffort("grok", bodyModelName(body), cfg.GrokReasoningEffort)
+				if ensureReasoningEffort(obj, effort) {
 					changed = true
 				}
 			}
@@ -501,6 +466,12 @@ func mutateJSONBody(cfg pluginConfig, body []byte, target string) ([]byte, bool)
 			}
 			if cfg.AddInstruction && cfg.CodexInstruction != "" {
 				if addResponsesInstruction(obj, cfg.CodexInstruction) {
+					changed = true
+				}
+			}
+			if cfg.CodexReasoningEffort != "" {
+				effort := resolveReasoningEffort("codex", bodyModelName(body), cfg.CodexReasoningEffort)
+				if ensureReasoningEffort(obj, effort) {
 					changed = true
 				}
 			}
@@ -751,37 +722,6 @@ func addChatSystemInstruction(obj map[string]any, instruction string) bool {
 	return true
 }
 
-func hasProvider(providers []string, target string) bool {
-	target = strings.ToLower(strings.TrimSpace(target))
-	if target == "" {
-		return false
-	}
-	for _, provider := range providers {
-		if strings.ToLower(strings.TrimSpace(provider)) == target {
-			return true
-		}
-	}
-	return false
-}
-
-func routeModelName(override string, fallback string) string {
-	override = strings.TrimSpace(override)
-	if override != "" {
-		return override
-	}
-	return strings.TrimSpace(fallback)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func matchesAnyPattern(candidates []string, patterns []string) bool {
 	for _, candidate := range candidates {
 		c := strings.ToLower(strings.TrimSpace(candidate))
@@ -808,6 +748,56 @@ func normalizeOneOf(value string, allowed []string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeReasoningConfig(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+
+	switch value {
+	case "none", "low", "medium", "high", "xhigh", "max":
+		return value
+	default:
+		return ""
+	}
+}
+
+func resolveReasoningEffort(target string, model string, configured string) string {
+	target = strings.ToLower(strings.TrimSpace(target))
+	model = strings.ToLower(strings.TrimSpace(model))
+	configured = strings.ToLower(strings.TrimSpace(configured))
+
+	if configured == "" {
+		return ""
+	}
+
+	if target == "codex" {
+		if configured == "max" || configured == "xhigh" {
+			// User preference: GPT only needs high.
+			return "high"
+		}
+		return configured
+	}
+
+	if target == "grok" {
+		if configured == "max" {
+			if strings.Contains(model, "multi-agent") {
+				return "xhigh"
+			}
+			return "high"
+		}
+
+		// xAI documents xhigh for multi-agent, but normal Grok models should stay at high.
+		if configured == "xhigh" && !strings.Contains(model, "multi-agent") {
+			return "high"
+		}
+
+		return configured
+	}
+
+	return configured
 }
 
 func cleanDomains(domains []string) []string {
