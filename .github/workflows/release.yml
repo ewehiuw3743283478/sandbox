@@ -143,3 +143,4 @@ jobs:
               --target "${GITHUB_SHA}" \
               --title "${TAG}" \
               --notes "Automated CLIProxyAPI plugin-store release for ${TAG}."
+          fi
